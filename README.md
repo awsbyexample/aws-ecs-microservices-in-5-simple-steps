@@ -10,7 +10,9 @@ To make it easier for you to follow along - this example is split into multiple 
 2. [HTTPs only (with custom domain)](./02-https-only.ts)
 3. [Using your own image](./03-custom-image.ts)
 4. [Multiple services + config](./04-multiple-services.ts)
-5. Autoscaling
+5. [Autoscaling](./05-autoscaling.ts)
+
+To understand what has changed, between examples, use `git diff --no-index file1 file2` (e.g. `git diff --no-index ./01-simple-microservice.ts ./02-https-only.ts`)
 
 To use them, (un)comment the relevant code in `index.ts`.
 
@@ -30,4 +32,4 @@ To use them, (un)comment the relevant code in `index.ts`.
 - Only public facing microservices in this example (no internally communicating services)
 
 ## How to run
-`pulumi up`
+`pulumi up` (alternatively, run `export AWS_PROFILE=<AWS profile name> && pulumi up ` if you have multiple profiles in your `~/.aws/credentials` file)

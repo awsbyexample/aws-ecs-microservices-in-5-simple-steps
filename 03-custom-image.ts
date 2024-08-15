@@ -55,7 +55,7 @@ const alb = new awsClassic.lb.LoadBalancer("app-lb", {
 });
 
 // Target Group = For a VM (=EC2 instance) on AWS, to be reachable by a load balancer, it must be registered with a target group
-const atg = new awsClassic.lb.TargetGroup("app-tg", {
+const todoAppTg = new awsClassic.lb.TargetGroup("todo-app-tg", {
     port: 80,
     protocol: "HTTP",
     targetType: "ip",
@@ -63,7 +63,7 @@ const atg = new awsClassic.lb.TargetGroup("app-tg", {
 });
 
 // The role that the ECS tasks will receive once it's running
-const role = new awsClassic.iam.Role("task-exec-role", {
+const ecsTaskInitializationRole = new awsClassic.iam.Role("task-init-role", {
     assumeRolePolicy: {
         Version: "2008-10-17",
         Statement: [{
@@ -80,7 +80,7 @@ const role = new awsClassic.iam.Role("task-exec-role", {
 // Here we simply attach the AmazonECSTaskExecutionRolePolicy policy to the role (= a predefined set of permissions)
 // See details here: https://docs.aws.amazon.com/aws-managed-policy/latest/reference/AmazonECSTaskExecutionRolePolicy.html
 const rpa = new awsClassic.iam.RolePolicyAttachment("task-exec-policy", {
-    role: role.name,
+    role: ecsTaskInitializationRole.name,
     policyArn: "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy",
 });
 
@@ -88,11 +88,9 @@ const rpa = new awsClassic.iam.RolePolicyAttachment("task-exec-policy", {
  * Native AWS provider stuff
  */
 // Cluster -[has multiple]→ Services -[has multiple]→ Tasks -[has 1-x]→ Containers
-const cluster = new awsnative.ecs.Cluster("cluster", {
-    clusterName: "aws-by-example-cluster",
-});
+const cluster = new awsnative.ecs.Cluster("aws-by-example");
 
-const wl = new awsnative.elasticloadbalancingv2.Listener("web", {
+const httpsRedirectListener = new awsnative.elasticloadbalancingv2.Listener("https-redirect-listener", {
     loadBalancerArn: alb.arn,
     port: 80,
     protocol: "HTTP",
@@ -122,7 +120,7 @@ const hostedZone = awsClassic.route53.getZone({
 
 // Code stolen here: https://ahanoff.dev/blog/worry-free-aws-acm-cert-validation/
 const hostedZoneAlbRecord = new awsClassic.route53.Record("lb-alias-record", {
-    name: YOUR_DOMAIN,
+    name: YOUR_DOMAIN, // One of the few examples where setting the explicit naming property (disabling Pulumi auto-naming) is actually useful
     zoneId: hostedZone.then(hostedZone => hostedZone.id),
     type: awsClassic.route53.RecordType.A,
     aliases: [{
@@ -166,7 +164,7 @@ certificate.domainValidationOptions.apply(validationOptions => {
         })
 })
 
-const secureWebListener = new awsnative.elasticloadbalancingv2.Listener("https-web", {
+const todoListener = new awsnative.elasticloadbalancingv2.Listener("todo-listener", {
     loadBalancerArn: alb.arn,
     certificates: [{
         certificateArn: certificate.arn,
@@ -175,13 +173,12 @@ const secureWebListener = new awsnative.elasticloadbalancingv2.Listener("https-w
     protocol: "HTTPS",
     defaultActions: [{
         type: "forward",
-        targetGroupArn: atg.arn,
+        targetGroupArn: todoAppTg.arn,
     }],
 });
 
 // Now, let's setup our own website as the image we're using
-const ecrRepo = new awsClassic.ecr.Repository("ecr-repo", {
-    name: "abe-example-ecr-repo",
+const ecrRepo = new awsClassic.ecr.Repository("abe-example-repo", {
     imageTagMutability: "MUTABLE",
     imageScanningConfiguration: {
         scanOnPush: true,
@@ -222,7 +219,7 @@ const allowImageAccess = new awsClassic.iam.Policy("ecr-access-policy", {
 });
 
 const taskExecutionRolePolicyAttachment = new awsClassic.iam.RolePolicyAttachment("task-execution-role-policy-attachment", {
-    role: role.name,
+    role: ecsTaskInitializationRole.name,
     policyArn: allowImageAccess.arn,
 });
 
@@ -247,7 +244,7 @@ const taskDefinition = new awsnative.ecs.TaskDefinition("website-task", {
     // Needs to be "awsvpc" since we're using Fargate
     networkMode: "awsvpc",
     requiresCompatibilities: ["FARGATE"],
-    executionRoleArn: role.arn,
+    executionRoleArn: ecsTaskInitializationRole.arn,
     containerDefinitions: [{
         name: "custom-website",
         image: websiteImage.imageUri,
@@ -270,8 +267,7 @@ const taskDefinition = new awsnative.ecs.TaskDefinition("website-task", {
     }
 });
 
-const service = new awsnative.ecs.Service("website-service", {
-    serviceName: "abe-example-website",
+const todoAppService = new awsnative.ecs.Service("todo-app-service", {
     cluster: cluster.arn,
     desiredCount: 1,
     launchType: "FARGATE",
@@ -284,10 +280,10 @@ const service = new awsnative.ecs.Service("website-service", {
         },
     },
     loadBalancers: [{
-        targetGroupArn: atg.arn,
+        targetGroupArn: todoAppTg.arn,
         containerName: "custom-website",
         containerPort: 80,
     }],
-}, { dependsOn: [wl, secureWebListener] });
+}, { dependsOn: [httpsRedirectListener, todoListener] });
 
 export const publicUrl = alb.dnsName;

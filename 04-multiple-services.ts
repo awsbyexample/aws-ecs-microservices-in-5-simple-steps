@@ -100,9 +100,7 @@ const rpa = new awsClassic.iam.RolePolicyAttachment("task-exec-policy", {
  * Native AWS provider stuff
  */
 // Cluster -[has multiple]→ Services -[has multiple]→ Tasks -[has 1-x]→ Containers
-const cluster = new awsnative.ecs.Cluster("cluster", {
-    clusterName: "aws-by-example-todo-app",
-});
+const cluster = new awsnative.ecs.Cluster("aws-by-example");
 
 const httpsRedirectListener = new awsnative.elasticloadbalancingv2.Listener("https-redirect-listener", {
     loadBalancerArn: alb.arn,
@@ -134,7 +132,7 @@ const hostedZone = awsClassic.route53.getZone({
 
 // Code stolen here: https://ahanoff.dev/blog/worry-free-aws-acm-cert-validation/
 const hostedZoneAlbRecord = new awsClassic.route53.Record("lb-alias-record", {
-    name: YOUR_DOMAIN,
+    name: YOUR_DOMAIN, // One of the few examples where setting the explicit naming property (disabling Pulumi auto-naming) is actually useful
     zoneId: hostedZone.then(hostedZone => hostedZone.id),
     type: awsClassic.route53.RecordType.A,
     aliases: [{
@@ -206,8 +204,7 @@ const todoApiListenerRule = new awsClassic.lb.ListenerRule("api-rule", {
 });
 
 // Now, let's setup our own website as the image we're using
-const ecrRepo = new awsClassic.ecr.Repository("ecr-repo", {
-    name: "abe-example-ecr-repo",
+const ecrRepo = new awsClassic.ecr.Repository("abe-example-repo", {
     imageTagMutability: "MUTABLE",
     imageScanningConfiguration: {
         scanOnPush: true,
@@ -396,7 +393,6 @@ const todoApiTask = new awsnative.ecs.TaskDefinition("todo-api-task", {
 });
 
 const todoAppService = new awsnative.ecs.Service("todo-app-service", {
-    serviceName: "todo-app",
     cluster: cluster.arn,
     desiredCount: 1,
     launchType: "FARGATE",
@@ -416,7 +412,6 @@ const todoAppService = new awsnative.ecs.Service("todo-app-service", {
 }, { dependsOn: [httpsRedirectListener, todoListener] });
 
 const todoApiService = new awsnative.ecs.Service("todo-api-service", {
-    serviceName: "todo-api",
     cluster: cluster.arn,
     desiredCount: 1,
     launchType: "FARGATE",
