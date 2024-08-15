@@ -100,9 +100,7 @@ const rpa = new awsClassic.iam.RolePolicyAttachment("task-exec-policy", {
  * Native AWS provider stuff
  */
 // Cluster -[has multiple]→ Services -[has multiple]→ Tasks -[has 1-x]→ Containers
-const cluster = new awsnative.ecs.Cluster("cluster", {
-    clusterName: "aws-by-example-todo-app",
-});
+const cluster = new awsnative.ecs.Cluster("aws-by-example");
 
 const httpsRedirectListener = new awsnative.elasticloadbalancingv2.Listener("https-redirect-listener", {
     loadBalancerArn: alb.arn,
@@ -134,7 +132,7 @@ const hostedZone = awsClassic.route53.getZone({
 
 // Code stolen here: https://ahanoff.dev/blog/worry-free-aws-acm-cert-validation/
 const hostedZoneAlbRecord = new awsClassic.route53.Record("lb-alias-record", {
-    name: YOUR_DOMAIN,
+    name: YOUR_DOMAIN, // One of the few examples where setting the explicit naming property (disabling Pulumi auto-naming) is actually useful
     zoneId: hostedZone.then(hostedZone => hostedZone.id),
     type: awsClassic.route53.RecordType.A,
     aliases: [{
@@ -206,8 +204,7 @@ const todoApiListenerRule = new awsClassic.lb.ListenerRule("api-rule", {
 });
 
 // Now, let's setup our own website as the image we're using
-const ecrRepo = new awsClassic.ecr.Repository("ecr-repo", {
-    name: "abe-example-ecr-repo",
+const ecrRepo = new awsClassic.ecr.Repository("abe-example-repo", {
     imageTagMutability: "MUTABLE",
     imageScanningConfiguration: {
         scanOnPush: true,
@@ -396,7 +393,6 @@ const todoApiTask = new awsnative.ecs.TaskDefinition("todo-api-task", {
 });
 
 const todoAppService = new awsnative.ecs.Service("todo-app-service", {
-    serviceName: "todo-app",
     cluster: cluster.arn,
     desiredCount: 1,
     launchType: "FARGATE",
@@ -416,7 +412,6 @@ const todoAppService = new awsnative.ecs.Service("todo-app-service", {
 }, { dependsOn: [httpsRedirectListener, todoListener] });
 
 const todoApiService = new awsnative.ecs.Service("todo-api-service", {
-    serviceName: "todo-api",
     cluster: cluster.arn,
     desiredCount: 1,
     launchType: "FARGATE",
@@ -434,6 +429,55 @@ const todoApiService = new awsnative.ecs.Service("todo-api-service", {
         containerPort: 80,
     }],
 }, { dependsOn: [httpsRedirectListener, todoListener, todoApiListenerRule] });
+
+// As a last step, let's add some auto-scaling so we can be sure our services scale up- and down with demand (making them more resilient)!
+const todoAppScalingTarget = new awsClassic.appautoscaling.Target("todo-app-service-scaling-target", {
+    maxCapacity: 10,
+    minCapacity: 1,
+    resourceId: pulumi.interpolate`service/${cluster.clusterName}/${todoAppService.serviceName}`,
+    scalableDimension: "ecs:service:DesiredCount",
+    serviceNamespace: "ecs",
+});
+
+const todoAppScalingPolicy = new awsClassic.appautoscaling.Policy("todo-app-scaledown-policy", {
+    policyType: "StepScaling",
+    resourceId: todoAppScalingTarget.resourceId,
+    scalableDimension: todoAppScalingTarget.scalableDimension,
+    serviceNamespace: todoAppScalingTarget.serviceNamespace,
+    stepScalingPolicyConfiguration: {
+        adjustmentType: "ChangeInCapacity",
+        cooldown: 60,
+        metricAggregationType: "Maximum",
+        stepAdjustments: [{
+            metricIntervalUpperBound: "0",
+            scalingAdjustment: -1,
+        }],
+    },
+});
+
+const todoApiScalingTarget = new awsClassic.appautoscaling.Target("todo-api-service-scaling-target", {
+    maxCapacity: 10,
+    minCapacity: 1,
+    resourceId: pulumi.interpolate`service/${cluster.clusterName}/${todoApiService.serviceName}`,
+    scalableDimension: "ecs:service:DesiredCount",
+    serviceNamespace: "ecs",
+});
+
+const todoApiScalingPolicy = new awsClassic.appautoscaling.Policy("todo-api-scaledown-policy", {
+    policyType: "StepScaling",
+    resourceId: todoApiScalingTarget.resourceId,
+    scalableDimension: todoApiScalingTarget.scalableDimension,
+    serviceNamespace: todoApiScalingTarget.serviceNamespace,
+    stepScalingPolicyConfiguration: {
+        adjustmentType: "ChangeInCapacity",
+        cooldown: 60,
+        metricAggregationType: "Maximum",
+        stepAdjustments: [{
+            metricIntervalUpperBound: "0",
+            scalingAdjustment: -1,
+        }],
+    },
+});
 
 export const publicUrl = YOUR_DOMAIN;
 export const publicApiUrl = `${YOUR_DOMAIN}/api`

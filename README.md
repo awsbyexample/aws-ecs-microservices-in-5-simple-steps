@@ -29,5 +29,5 @@ To use them, (un)comment the relevant code in `index.ts`.
 ## Limitations
 - Only public facing microservices in this example (no internally communicating services)
 
-## How to install
+## How to run
 `pulumi up`
