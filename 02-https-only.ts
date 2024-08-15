@@ -14,95 +14,93 @@ import * as awsnative from "@pulumi/aws-native";
 
 // VPC = Virtual Private Cloud
 // Subnet = A range of IP addresses in your VPC
-const defaultVpc = awsClassic.ec2.getVpcOutput({default: true});
+const defaultVpc = awsClassic.ec2.getVpcOutput({ default: true });
 const defaultVpcSubnets = awsClassic.ec2.getSubnetsOutput({
-    filters: [
-        {name: "vpc-id", values: [defaultVpc.id]},
-    ],
+  filters: [
+    { name: "vpc-id", values: [defaultVpc.id] },
+  ],
 });
 
 // Security Group = A virtual firewall that controls inbound and outbound traffic to your instances
 const group = new awsClassic.ec2.SecurityGroup("web-secgrp", {
-    vpcId: defaultVpc.id,
-    description: "Enable HTTP & HTTPs access",
-    ingress: [
-        {
-            protocol: "tcp",
-            fromPort: 80,
-            toPort: 80,
-            cidrBlocks: ["0.0.0.0/0"],
-        },
-        {
-            protocol: "tcp",
-            fromPort: 443,
-            toPort: 443,
-            cidrBlocks: ["0.0.0.0/0"],
-        },
-    ],
-    egress: [{
-        protocol: "-1",
-        fromPort: 0,
-        toPort: 0,
-        cidrBlocks: ["0.0.0.0/0"],
-    }],
+  vpcId: defaultVpc.id,
+  description: "Enable HTTP & HTTPs access",
+  ingress: [
+    {
+      protocol: "tcp",
+      fromPort: 80,
+      toPort: 80,
+      cidrBlocks: ["0.0.0.0/0"],
+    },
+    {
+      protocol: "tcp",
+      fromPort: 443,
+      toPort: 443,
+      cidrBlocks: ["0.0.0.0/0"],
+    },
+  ],
+  egress: [{
+    protocol: "-1",
+    fromPort: 0,
+    toPort: 0,
+    cidrBlocks: ["0.0.0.0/0"],
+  }],
 });
 
 // ALB = Application Load Balancer (can route based on path (e.g. /api, /billing etc.))
 const alb = new awsClassic.lb.LoadBalancer("app-lb", {
-    securityGroups: [group.id],
-    subnets: defaultVpcSubnets.ids,
+  securityGroups: [group.id],
+  subnets: defaultVpcSubnets.ids,
 });
 
 // Target Group = For a VM (=EC2 instance) on AWS, to be reachable by a load balancer, it must be registered with a target group
-const atg = new awsClassic.lb.TargetGroup("app-tg", {
-    port: 80,
-    protocol: "HTTP",
-    targetType: "ip",
-    vpcId: defaultVpc.id,
+const todoAppTg = new awsClassic.lb.TargetGroup("todo-app-tg", {
+  port: 80,
+  protocol: "HTTP",
+  targetType: "ip",
+  vpcId: defaultVpc.id,
 });
 
 // The role that the ECS tasks will receive once it's running
-const role = new awsClassic.iam.Role("task-exec-role", {
-    assumeRolePolicy: {
-        Version: "2008-10-17",
-        Statement: [{
-            Sid: "",
-            Effect: "Allow",
-            Principal: {
-                Service: "ecs-tasks.amazonaws.com",
-            },
-            Action: "sts:AssumeRole",
-        }],
-    },
+const ecsTaskInitializationRole = new awsClassic.iam.Role("task-init-role", {
+  assumeRolePolicy: {
+    Version: "2008-10-17",
+    Statement: [{
+      Sid: "",
+      Effect: "Allow",
+      Principal: {
+        Service: "ecs-tasks.amazonaws.com",
+      },
+      Action: "sts:AssumeRole",
+    }],
+  },
 });
 
 // Here we simply attach the AmazonECSTaskExecutionRolePolicy policy to the role (= a predefined set of permissions)
 // See details here: https://docs.aws.amazon.com/aws-managed-policy/latest/reference/AmazonECSTaskExecutionRolePolicy.html
 const rpa = new awsClassic.iam.RolePolicyAttachment("task-exec-policy", {
-    role: role.name,
-    policyArn: "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy",
+  role: ecsTaskInitializationRole.name,
+  policyArn: "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy",
 });
 
 /**
  * Native AWS provider stuff
  */
 // Cluster -[has multiple]→ Services -[has multiple]→ Tasks -[has 1-x]→ Containers
-const cluster = new awsnative.ecs.Cluster("cluster", {
-  clusterName: "aws-by-example-cluster",
-});
+const cluster = new awsnative.ecs.Cluster("aws-by-example");
 
-const wl = new awsnative.elasticloadbalancingv2.Listener("web", {
+const httpsRedirectListener = new awsnative.elasticloadbalancingv2.Listener("https-redirect-listener", {
   loadBalancerArn: alb.arn,
   port: 80,
   protocol: "HTTP",
   defaultActions: [{
-      type: 'redirect',
-      redirectConfig: {
-        statusCode: 'HTTP_301',
-        host: '#{host}',
-        path: '/#{path}',
-        protocol: 'HTTPS',
-      }
+    type: 'redirect',
+    redirectConfig: {
+      statusCode: 'HTTP_301',
+      host: '#{host}',
+      path: '/#{path}',
+      protocol: 'HTTPS',
+    }
   }],
 });
 
@@ -110,25 +108,25 @@ const YOUR_DOMAIN = 'uncld.net'
 
 
 const certificate = new awsClassic.acm.Certificate("alb-certificate", {
-    domainName: YOUR_DOMAIN,
-    validationMethod: "DNS",
+  domainName: YOUR_DOMAIN,
+  validationMethod: "DNS",
 })
 
 const hostedZone = awsClassic.route53.getZone({
-    name: YOUR_DOMAIN,
-    privateZone: false,
+  name: YOUR_DOMAIN,
+  privateZone: false,
 })
 
 // Code stolen here: https://ahanoff.dev/blog/worry-free-aws-acm-cert-validation/
 const hostedZoneAlbRecord = new awsClassic.route53.Record("lb-alias-record", {
-    name: YOUR_DOMAIN,
-    zoneId: hostedZone.then(hostedZone => hostedZone.id),
-    type: awsClassic.route53.RecordType.A,
-    aliases: [{
-        name: alb.dnsName,
-        zoneId: alb.zoneId,
-        evaluateTargetHealth: true,
-    }]
+  name: YOUR_DOMAIN, // One of the few examples where setting the explicit naming property (disabling Pulumi auto-naming) is actually useful
+  zoneId: hostedZone.then(hostedZone => hostedZone.id),
+  type: awsClassic.route53.RecordType.A,
+  aliases: [{
+    name: alb.dnsName,
+    zoneId: alb.zoneId,
+    evaluateTargetHealth: true,
+  }]
 })
 
 /**
@@ -140,43 +138,43 @@ const hostedZoneAlbRecord = new awsClassic.route53.Record("lb-alias-record", {
 const uniqWith = (arr: any[], fn: (arg0: any, arg1: any) => any) => arr.filter((element, index) => arr.findIndex((step) => fn(element, step)) === index);
 
 certificate.domainValidationOptions.apply(validationOptions => {
-    // filter out duplicate validation options based on record type, name and value
-    uniqWith(validationOptions, (x: awsClassic.types.output.acm.CertificateDomainValidationOption, y: awsClassic.types.output.acm.CertificateDomainValidationOption) => {
-        return x.resourceRecordType === y.resourceRecordType && x.resourceRecordValue === y.resourceRecordValue && x.resourceRecordName === y.resourceRecordName
-    })
+  // filter out duplicate validation options based on record type, name and value
+  uniqWith(validationOptions, (x: awsClassic.types.output.acm.CertificateDomainValidationOption, y: awsClassic.types.output.acm.CertificateDomainValidationOption) => {
+    return x.resourceRecordType === y.resourceRecordType && x.resourceRecordValue === y.resourceRecordValue && x.resourceRecordName === y.resourceRecordName
+  })
     // map validation options to Route53 record
     .map((validationOption, index) => {
-        return new awsClassic.route53.Record(`${YOUR_DOMAIN}-cert-validation-record-${index}`, {
-            type: validationOption.resourceRecordType,
-            ttl: 60,
-            zoneId: hostedZone.then(hostedZone => hostedZone.id),
-            name: validationOption.resourceRecordName,
-            records: [
-                validationOption.resourceRecordValue
-            ]
-        })
+      return new awsClassic.route53.Record(`${YOUR_DOMAIN}-cert-validation-record-${index}`, {
+        type: validationOption.resourceRecordType,
+        ttl: 60,
+        zoneId: hostedZone.then(hostedZone => hostedZone.id),
+        name: validationOption.resourceRecordName,
+        records: [
+          validationOption.resourceRecordValue
+        ]
+      })
     })
     // for each record request DSN validation
     .forEach((certValidationRecord, index) => {
-        new awsClassic.acm.CertificateValidation(`${YOUR_DOMAIN}-cert-dns-validation-${index}`, {
-            certificateArn: certificate.arn,
-            validationRecordFqdns: [ certValidationRecord.fqdn ]    
-        })
+      new awsClassic.acm.CertificateValidation(`${YOUR_DOMAIN}-cert-dns-validation-${index}`, {
+        certificateArn: certificate.arn,
+        validationRecordFqdns: [certValidationRecord.fqdn]
+      })
     })
 })
 
 const secureWebListener = new awsnative.elasticloadbalancingv2.Listener("https-web", {
-    loadBalancerArn: alb.arn,
-    certificates: [{
-        certificateArn: certificate.arn,
-    }],
-    port: 443,
-    protocol: "HTTPS",
-    defaultActions: [{
-        type: "forward",
-        targetGroupArn: atg.arn,
-    }],
-  });
+  loadBalancerArn: alb.arn,
+  certificates: [{
+    certificateArn: certificate.arn,
+  }],
+  port: 443,
+  protocol: "HTTPS",
+  defaultActions: [{
+    type: "forward",
+    targetGroupArn: todoAppTg.arn,
+  }],
+});
 
 const taskDefinition = new awsnative.ecs.TaskDefinition("app-task", {
   // Name of the family of tasks this belongs to - this is used to group tasks together (for versioning)
@@ -195,36 +193,35 @@ const taskDefinition = new awsnative.ecs.TaskDefinition("app-task", {
   // Needs to be "awsvpc" since we're using Fargate
   networkMode: "awsvpc",
   requiresCompatibilities: ["FARGATE"],
-  executionRoleArn: role.arn,
+  executionRoleArn: ecsTaskInitializationRole.arn,
   containerDefinitions: [{
-      name: "example-webserver",
-      image: "nginx",
-      portMappings: [{
-          containerPort: 80,
-          hostPort: 80,
-          protocol: "tcp",
-      }],
+    name: "example-webserver",
+    image: "nginx",
+    portMappings: [{
+      containerPort: 80,
+      hostPort: 80,
+      protocol: "tcp",
+    }],
   }],
 });
 
 const service = new awsnative.ecs.Service("app-svc", {
-  serviceName: "app-svc-cloud-api",
   cluster: cluster.arn,
   desiredCount: 1,
   launchType: "FARGATE",
   taskDefinition: taskDefinition.taskDefinitionArn,
   networkConfiguration: {
-      awsvpcConfiguration: {
-          assignPublicIp: "ENABLED",
-          subnets: defaultVpcSubnets.ids,
-          securityGroups: [group.id],
-      },
+    awsvpcConfiguration: {
+      assignPublicIp: "ENABLED",
+      subnets: defaultVpcSubnets.ids,
+      securityGroups: [group.id],
+    },
   },
   loadBalancers: [{
-      targetGroupArn: atg.arn,
-      containerName: "example-webserver",
-      containerPort: 80,
+    targetGroupArn: todoAppTg.arn,
+    containerName: "example-webserver",
+    containerPort: 80,
   }],
-}, {dependsOn: [wl, secureWebListener]});
+}, { dependsOn: [httpsRedirectListener, secureWebListener] });
 
 export const publicUrl = alb.dnsName;
